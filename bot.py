@@ -1,60 +1,61 @@
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import requests
 import os
 import logging
+import requests
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from urllib.parse import quote_plus
 
-# Environment tokens
+# ✅ Load tokens from environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+# ✅ Enable logging
 logging.basicConfig(level=logging.INFO)
 
-# Detect Dhivehi (Thaana characters)
+# ✅ Detect if Dhivehi (Thaana script) is used
 def is_dhivehi(text: str) -> bool:
     return any("ހ" <= c <= "ް" for c in text)
 
-# Query Google Places API with full free-form text
-def search_google_places(query: str):
+# ✅ Search location details using Google Places API
+async def search_places(query: str, is_dv: bool = False):
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {
-        "query": query,
+        "query": query + " in Maldives",
         "key": GOOGLE_API_KEY,
-        "region": "mv",
-        "language": "dv" if is_dhivehi(query) else "en"
+        "language": "dv" if is_dv else "en"
     }
-
     response = requests.get(url, params=params)
-    data = response.json()
+    return response.json().get("results", [])
 
-    results = []
-    if data.get("status") == "OK":
-        for place in data.get("results", []):
-            name = place.get("name")
-            address = place.get("formatted_address")
-            lat = place["geometry"]["location"]["lat"]
-            lng = place["geometry"]["location"]["lng"]
-            maps_link = f"https://maps.google.com/?q={lat},{lng}"
-            results.append((name, address, lat, lng, maps_link))
-    return results
-
-# Bot message handler
+# ✅ Handle incoming Telegram messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
-    results = search_google_places(query)
+    is_dv = is_dhivehi(query)
+
+    # 🔍 Fetch locations from Google Places
+    results = await search_places(query, is_dv)
 
     if results:
-        for name, address, lat, lng, link in results[:5]:
-            await update.message.reply_text(f"📍 *{name}*\n{address}", parse_mode="Markdown")
-            await update.message.reply_location(latitude=lat, longitude=lng)
-            await update.message.reply_text(f"[🗺️ Open in Google Maps]({link})", parse_mode="Markdown")
+        pins = []
+        for result in results[:5]:  # Limit to 5 results
+            name = result.get("name", "Unknown")
+            address = result.get("formatted_address", "No address available")
+            pins.append(f"📍 *{name}*\n{address}")
+
+        # 📍 Prepare map search URL
+        encoded_query = quote_plus(query + " in Maldives")
+        maps_link = f"https://www.google.com/maps/search/{encoded_query}"
+
+        # 📦 Send summary + map
+        reply_text = "\n\n".join(pins) + f"\n\n[🗺️ View All on Map]({maps_link})"
+        await update.message.reply_text(reply_text, parse_mode="Markdown")
     else:
         await update.message.reply_text(
-            f"❌ Couldn't find anything for: *{query}*",
+            f"❌ Couldn't find anything for: *{query}*\nTry asking:\n- Where is Majeedhee Magu?\n- Flower shops near me",
             parse_mode="Markdown"
         )
 
-# Run the bot
+# ✅ Main bot launcher
 def main():
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
